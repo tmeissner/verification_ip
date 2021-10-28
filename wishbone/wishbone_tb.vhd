@@ -21,6 +21,7 @@ end entity wishbone_tb;
 
 architecture testbench of wishbone_tb is
 
+  constant C_CLOCK_PERIOD : time := 2 ns;
 
   constant C_WB_ADDR_WIDTH : positive := 32;
   constant C_WB_DATA_WIDTH : positive := 32;
@@ -39,53 +40,58 @@ architecture testbench of wishbone_tb is
   signal s_wb_slave : t_wb_slave(Dat(C_WB_DATA_WIDTH-1 downto 0),
                                  Tgd(C_WB_TGD_WIDTH-1 downto 0));
 
-  signal s_wb_slave_resp : std_logic_vector(2 downto 0);
-
   alias s_clk   is s_wb_syscon.Clk;
   alias s_reset is s_wb_syscon.Reset;
+
 
 begin
 
 
-  s_clk   <= not s_clk after 1 ns;
+  s_clk   <= not s_clk after C_CLOCK_PERIOD / 2;
   s_reset <= '0' after 4 ns;
 
-  s_wb_slave_resp <= s_wb_slave.Rty & s_wb_slave.Err & s_wb_slave.Ack;
-
   wb_master_p : process is
+    subtype t_wb_array is t_slv_array(0 to 7)(open);
+    variable v_wb_adr   : t_wb_array(open)(C_WB_ADDR_WIDTH-1 downto 0);
+    variable v_wb_wdata : t_wb_array(open)(C_WB_DATA_WIDTH-1 downto 0);
+    variable v_wb_rdata : t_wb_array(open)(C_WB_DATA_WIDTH-1 downto 0);
   begin
     s_wb_master.Cyc <= '0';
     s_wb_master.Stb <= '0';
     wait until s_reset = '0';
-    -- simple reads
-    for i in 0 to 2 loop
-      wait until rising_edge(s_clk);
-      s_wb_master.Cyc <= '1';
-      s_wb_master.Stb <= '1';
-      s_wb_master.We  <= '0';
-      wait until s_wb_slave_resp(i) = '1' and rising_edge(s_clk);
-      report "Master: end simple read cycle";
-      s_wb_master.Cyc <= '0';
-      s_wb_master.Stb <= '0';
+    -- single read cycles
+    for wait_cycles in 0 to 3 loop
+      single_cycle(s_wb_syscon, s_wb_master, s_wb_slave, '0', v_wb_adr(0), v_wb_wdata(0), v_wb_rdata(0));
     end loop;
+    -- single write cycles
+    for wait_cycles in 0 to 3 loop
+      single_cycle(s_wb_syscon, s_wb_master, s_wb_slave, '1', v_wb_adr(0), v_wb_wdata(0), v_wb_rdata(0));
+    end loop;
+    -- block cycles
+    block_cycle(s_wb_syscon, s_wb_master, s_wb_slave, '0', v_wb_adr, v_wb_wdata, v_wb_rdata);
+    block_cycle(s_wb_syscon, s_wb_master, s_wb_slave, '1', v_wb_adr, v_wb_wdata, v_wb_rdata);
     wait for 10 ns;
     stop(0);
   end process wb_master_p;
 
 
   wb_slave_p : process is
-    variable v_resp : std_logic_vector(2 downto 0) := "000";
   begin
-    (s_wb_slave.Rty, s_wb_slave.Err, s_wb_slave.Ack) <= v_resp;
+    s_wb_slave.Rty <= '0';
+    s_wb_slave.Err <= '0';
+    s_wb_slave.Ack <= '0';
     wait until s_reset = '0';
-    -- simple read
-    for i in 0 to 2 loop
-      wait until (s_wb_master.Cyc and s_wb_master.Stb) = '1' and rising_edge(s_clk);
-      v_resp(i) := '1';
-      (s_wb_slave.Rty, s_wb_slave.Err, s_wb_slave.Ack) <= v_resp;
-      wait until not s_wb_master.Stb;
-       v_resp(i) := '0';
-      (s_wb_slave.Rty, s_wb_slave.Err, s_wb_slave.Ack) <= v_resp;
+    loop
+      for wait_cycles in 0 to 3 loop
+        wait until rising_edge(s_clk) and (s_wb_master.Cyc and s_wb_master.Stb) = '1';
+        if wait_cycles /= 0 then
+          wait for C_CLOCK_PERIOD * wait_cycles - 1 ps;
+          wait until rising_edge(s_clk);
+        end if;
+        s_wb_slave.Ack <= '1';
+        wait until rising_edge(s_clk);
+        s_wb_slave.Ack <= '0';
+      end loop;
     end loop;
     wait;
   end process wb_slave_p;
